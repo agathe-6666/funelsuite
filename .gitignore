@@ -1,0 +1,25 @@
+# Dépendances
+node_modules/
+
+# Secrets — jamais dans le dépôt
+.env
+.dev.vars
+*.env
+!.dev.vars.example
+
+# Cloudflare / wrangler (D1 locale, état miniflare, build worker)
+.wrangler/
+.mf/
+
+# Bases SQLite locales éventuelles
+*.sqlite
+*.sqlite3
+*.db
+
+# Build front
+client/dist/
+
+# Logs / divers
+*.log
+npm-debug.log*
+.DS_Store

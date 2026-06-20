@@ -1,0 +1,30 @@
+# ════════════════════════════════════════════════════════════════════════
+#  FUNEL suite — configuration Cloudflare Worker.
+#  Un seul Worker sert l'app React (assets statiques) ET l'API /api/*,
+#  adossé à une base Cloudflare D1 (SQLite serverless).
+#  • En local  : `npm run dev`     → wrangler dev (D1 locale) + Vite (UI:5173)
+#  • En ligne  : `npm run deploy`   → build React + wrangler deploy
+# ════════════════════════════════════════════════════════════════════════
+name = "funel-suite"
+main = "server/index.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Variables non sensibles (le token Superhote est un SECRET, voir README §Cloudflare)
+[vars]
+SUPERHOTE_BASE_URL = "https://connect.superhote.com/api/v2/public"
+
+# Base de données D1. Après `wrangler d1 create funel-suite-db`,
+# colle l'identifiant renvoyé dans database_id ci-dessous.
+[[d1_databases]]
+binding = "DB"
+database_name = "funel-suite-db"
+database_id = "REMPLACER_PAR_TON_DATABASE_ID"
+migrations_dir = "migrations"
+
+# App React buildée, servie par le Worker. not_found = SPA → le routage
+# côté client (React Router) fonctionne sur toutes les URL.
+[assets]
+directory = "./client/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"

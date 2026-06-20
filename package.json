@@ -1,0 +1,23 @@
+{
+  "name": "funel-suite",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plateforme de pilotage de la sous-location courte durée — FUNEL suite (Cloudflare Worker + D1)",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "predev": "npm run build -w client",
+    "dev": "concurrently -n api,web -c blue,yellow \"wrangler dev --port 8787\" \"npm run dev -w client\"",
+    "build": "npm run build -w client",
+    "deploy": "npm run build -w client && wrangler deploy",
+    "db:setup:local": "wrangler d1 migrations apply funel-suite-db --local && wrangler d1 execute funel-suite-db --local --file=./server/seed.sql",
+    "db:setup:remote": "wrangler d1 migrations apply funel-suite-db --remote && wrangler d1 execute funel-suite-db --remote --file=./server/seed.sql",
+    "db:migrate:remote": "wrangler d1 migrations apply funel-suite-db --remote"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "wrangler": "^3.99.0"
+  }
+}

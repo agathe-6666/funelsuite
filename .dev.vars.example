@@ -1,0 +1,15 @@
+# ─── FUNEL suite · secrets LOCAUX (wrangler dev) ───────────────────────────
+# Copier en .dev.vars (jamais commité) pour le développement local.
+# En PRODUCTION Cloudflare, ces valeurs se définissent avec :
+#   wrangler secret put SUPERHOTE_TOKEN
+#
+# Token Bearer de l'API publique Superhote (Lot 6). À régénérer dans Superhote
+# (l'ancien token a été partagé en clair → considéré comme compromis).
+SUPERHOTE_TOKEN=
+
+# Optionnel — surcharge de l'URL de base (sinon valeur de wrangler.toml [vars])
+# SUPERHOTE_BASE_URL=https://connect.superhote.com/api/v2/public
+
+# ─── Événements (Lot 10 — optionnel) ───────────────────────────────────────
+TICKETMASTER_API_KEY=
+PREDICTHQ_TOKEN=

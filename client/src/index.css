@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Clear Sans n'est pas sur Google Fonts ; on retombe proprement sur une sans
+   neutre via la pile définie dans tailwind.config.js (font-corps). */
+@layer base {
+  body {
+    @apply bg-creme text-nuit font-corps antialiased;
+  }
+  h1, h2, h3 {
+    @apply font-titre;
+  }
+}
+
+@layer components {
+  .carte {
+    @apply bg-white rounded-2xl shadow-carte p-5 border border-poudre/60;
+  }
+  .label-champ {
+    @apply block text-xs font-medium uppercase tracking-wide text-nuit/60 mb-1;
+  }
+  .input {
+    @apply w-full rounded-lg border border-poudre bg-white px-3 py-2 text-sm
+           text-nuit focus:outline-none focus:ring-2 focus:ring-nuit/40;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition;
+  }
+  .btn-nuit {
+    @apply btn bg-nuit text-white hover:bg-nuit/90;
+  }
+  .btn-or {
+    @apply btn bg-or text-nuit hover:brightness-95;
+  }
+  .btn-ghost {
+    @apply btn border border-poudre text-nuit hover:bg-poudre/40;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+}
