@@ -19,7 +19,7 @@ SUPERHOTE_BASE_URL = "https://connect.superhote.com/api/v2/public"
 [[d1_databases]]
 binding = "DB"
 database_name = "funel-suite-db"
-database_id = "REMPLACER_PAR_TON_DATABASE_ID"
+database_id = "5b1c773c-d73b-4437-b7ac-96c95477ef7e"
 migrations_dir = "migrations"
 
 # App React buildée, servie par le Worker. not_found = SPA → le routage
