@@ -5,7 +5,7 @@
 #  • En local  : `npm run dev`     → wrangler dev (D1 locale) + Vite (UI:5173)
 #  • En ligne  : `npm run deploy`   → build React + wrangler deploy
 # ════════════════════════════════════════════════════════════════════════
-name = "funel-suite"
+name = "funelsuite"
 main = "server/index.js"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
