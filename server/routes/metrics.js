@@ -186,4 +186,44 @@ router.post('/simulation', async (c) => {
   }));
 });
 
+// ─── Vue Calendrier : grille jour par jour d'un bien (dispo, prix, séjour) ──
+router.get('/calendrier', async (c) => {
+  const db = c.env.DB;
+  const ym = c.req.query('mois') || ymCourant();
+  const logementId = Number(c.req.query('logement_id'));
+  if (!logementId) return c.json({ error: 'logement_id requis' }, 400);
+
+  const nbj = joursDansMois(ym);
+  const start = `${ym}-01`;
+  const end = `${ym}-${String(nbj).padStart(2, '0')}`;
+
+  const { results: cal } = await db.prepare(
+    'SELECT date, dispo, prix_affiche, min_stay FROM calendrier WHERE logement_id = ? AND date >= ? AND date <= ? ORDER BY date'
+  ).bind(logementId, start, end).all();
+  const calByDate = new Map(cal.map((r) => [r.date, r]));
+
+  // Réservations qui chevauchent le mois (check_in <= fin ET check_out > début)
+  const { results: resas } = await db.prepare(
+    'SELECT * FROM reservations WHERE logement_id = ? AND check_in <= ? AND check_out > ? ORDER BY check_in'
+  ).bind(logementId, end, start).all();
+
+  const jours = [];
+  for (let d = 1; d <= nbj; d++) {
+    const date = `${ym}-${String(d).padStart(2, '0')}`;
+    const cinfo = calByDate.get(date);
+    const resa = resas.find((r) => r.check_in <= date && date < r.check_out) || null;
+    jours.push({
+      date,
+      jour: d,
+      dispo: cinfo ? cinfo.dispo : null,
+      prix_affiche: cinfo ? cinfo.prix_affiche : null,
+      premier_jour: resa ? resa.check_in === date : false, // pour afficher le nom une seule fois
+      reservation: resa
+        ? { id: resa.id, voyageur: resa.voyageur_nom, statut: resa.statut, canal: resa.canal, check_in: resa.check_in, check_out: resa.check_out, nb_nuits: resa.nb_nuits, prix_sejour: resa.prix_sejour }
+        : null,
+    });
+  }
+  return c.json({ ym, logement_id: logementId, jours, reservations: resas });
+});
+
 export default router;

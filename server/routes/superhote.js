@@ -130,10 +130,11 @@ router.post('/sync', async (c) => {
     let prix = num(it.total_price ?? it.totalPrice ?? it.total_amount ?? it.amount ?? it.price ?? it.payout ?? it.prix_sejour);
     if (!prix) prix = await prixDepuisCalendrier(logementId, check_in, check_out);
     const taxe = num(it.city_tax ?? it.cityTax ?? it.tourist_tax ?? it.taxe_sejour);
-    // status numérique Superhote : 1 = confirmée. Les codes d'annulation seront
-    // ajoutés ici une fois identifiés (cf. statuts_vus dans la réponse).
-    const ANNULEES = new Set([]);
-    const statut = ANNULEES.has(Number(it.status)) ? 'annulée' : 'confirmée';
+    // Superhote : status 1 = confirmée. Tout autre code (annulation, demande
+    // refusée…) → marqué « annulée » et EXCLU du CA. Ajuste CONFIRMEES au besoin
+    // (cf. statuts_vus renvoyé ci-dessous).
+    const CONFIRMEES = new Set([1]);
+    const statut = CONFIRMEES.has(Number(it.status)) ? 'confirmée' : 'annulée';
     const dateResa = String(it.created_at ?? it.createdAt ?? it.booked_at ?? it.date_reservation ?? '').slice(0, 10);
     const nomComplet = `${it.guest_first_name ?? ''} ${it.guest_last_name ?? ''}`.trim();
     const voyageur = it.guest_name ?? it.guestName ?? it.guest?.name ?? (nomComplet || it.voyageur_nom || null);

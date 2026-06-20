@@ -4,12 +4,14 @@ import Logements from './pages/Logements.jsx';
 import LogementDetail from './pages/LogementDetail.jsx';
 import Objectifs from './pages/Objectifs.jsx';
 import Reservations from './pages/Reservations.jsx';
+import Calendrier from './pages/Calendrier.jsx';
 import Simulateur from './pages/Simulateur.jsx';
 
 const NAV = [
   { to: '/', label: 'Tableau de bord', icon: '▹', end: true },
   { to: '/logements', label: 'Logements & charges', icon: '↳' },
   { to: '/reservations', label: 'Réservations', icon: '↳' },
+  { to: '/calendrier', label: 'Calendrier', icon: '↳' },
   { to: '/objectifs', label: 'Objectifs', icon: '↳' },
   { to: '/simulateur', label: 'Simulateur', icon: '▹' },
 ];
@@ -57,6 +59,7 @@ export default function App() {
           <Route path="/logements" element={<Logements />} />
           <Route path="/logements/:id" element={<LogementDetail />} />
           <Route path="/reservations" element={<Reservations />} />
+          <Route path="/calendrier" element={<Calendrier />} />
           <Route path="/objectifs" element={<Objectifs />} />
           <Route path="/simulateur" element={<Simulateur />} />
         </Routes>

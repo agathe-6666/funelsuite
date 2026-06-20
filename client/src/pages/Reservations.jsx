@@ -121,28 +121,34 @@ export default function Reservations() {
               <th className="text-right p-3">Prix</th>
               <th className="text-right p-3">Upsells</th>
               <th className="text-left p-3">Canal</th>
+              <th className="text-left p-3">Statut</th>
               <th className="p-3"></th>
             </tr>
           </thead>
           <tbody>
-            {list.map((r) => (
-              <tr key={r.id} className="border-t border-poudre/50 hover:bg-creme/60">
+            {list.map((r) => {
+              const annulee = r.statut === 'annulée';
+              return (
+              <tr key={r.id} className={`border-t border-poudre/50 hover:bg-creme/60 ${annulee ? 'opacity-60' : ''}`}>
                 <td className="p-3 font-medium">{nomBien(r.logement_id)}</td>
-                <td className="p-3">{r.voyageur_nom || '—'}</td>
+                <td className={`p-3 ${annulee ? 'line-through' : ''}`}>{r.voyageur_nom || '—'}</td>
                 <td className="p-3 text-nuit/60">{r.check_in} → {r.check_out}</td>
                 <td className="p-3 text-right">{r.nb_nuits}</td>
-                <td className="p-3 text-right font-medium">{fmtEuro(r.prix_sejour)}</td>
+                <td className={`p-3 text-right font-medium ${annulee ? 'line-through text-nuit/40' : ''}`}>{fmtEuro(r.prix_sejour)}</td>
                 <td className="p-3 text-right">
                   <button onClick={() => ajouterUpsell(r)} className="text-nuit hover:text-or" title="Ajouter un upsell">
                     {r.upsells_total > 0 ? fmtEuro(r.upsells_total) : '+ '}
                   </button>
                 </td>
                 <td className="p-3"><Badge ton="poudre">{r.canal || '—'}</Badge></td>
+                <td className="p-3">
+                  {annulee ? <Badge ton="rouge">annulée</Badge> : <Badge ton="vert">confirmée</Badge>}
+                </td>
                 <td className="p-3 text-right">
                   <button onClick={() => supprimer(r)} className="text-rose-500 hover:text-rose-700">✕</button>
                 </td>
               </tr>
-            ))}
+            );})}
           </tbody>
         </table>
         {list.length === 0 && <div className="p-6 text-center text-nuit/40">Aucune réservation en {moisLabel(mois)}.</div>}
