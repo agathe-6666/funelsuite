@@ -110,8 +110,8 @@ export default function Reservations() {
         </form>
       )}
 
-      <div className="carte p-0 overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="carte p-0 overflow-x-auto">
+        <table className="w-full text-sm min-w-[760px]">
           <thead className="bg-poudre/50 text-nuit/60 text-xs uppercase">
             <tr>
               <th className="text-left p-3">Bien</th>

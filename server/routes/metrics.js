@@ -8,6 +8,7 @@ import {
   joursDansMois,
   totalChargesFixes,
 } from '../lib/rentability.js';
+import { genererRecommandations } from '../lib/recommandations.js';
 
 const router = new Hono();
 
@@ -74,6 +75,33 @@ function bailCouvre(l, ym) {
   return true;
 }
 
+// Contexte calendrier/réservations pour le moteur de recommandations.
+async function contexteReco(db, logementId, ym, estMoisCourant, jourDuMois, nbJoursMois) {
+  const today = new Date().toISOString().slice(0, 10);
+  const end = `${ym}-${String(nbJoursMois).padStart(2, '0')}`;
+  const refStart = estMoisCourant ? today : `${ym}-01`;
+  const q = async (sql, ...args) => (await db.prepare(sql).bind(...args).first()).n || 0;
+
+  const nuitsLibresMois = await q(
+    'SELECT COUNT(*) AS n FROM calendrier WHERE logement_id = ? AND dispo = 1 AND date >= ? AND date <= ?',
+    logementId, refStart, end);
+  const d20 = new Date(); d20.setDate(d20.getDate() + 20);
+  const nuitsLibres20j = await q(
+    'SELECT COUNT(*) AS n FROM calendrier WHERE logement_id = ? AND dispo = 1 AND date >= ? AND date <= ?',
+    logementId, today, d20.toISOString().slice(0, 10));
+  const resaLointaines = await q(
+    `SELECT COUNT(*) AS n FROM reservations
+     WHERE logement_id = ? AND statut = 'confirmée' AND check_in > ?
+       AND date_reservation IS NOT NULL AND date_reservation != ''
+       AND julianday(check_in) - julianday(date_reservation) > 20`,
+    logementId, today);
+
+  return {
+    jour: jourDuMois, nbJours: nbJoursMois, joursRestants: Math.max(0, nbJoursMois - jourDuMois),
+    nuitsLibresMois, nuitsLibres20j, resaLointaines,
+  };
+}
+
 async function dataLogement(db, logementId) {
   const logement = await db.prepare('SELECT * FROM logements WHERE id = ?').bind(logementId).first();
   const chargesFixes = await db.prepare('SELECT * FROM charges_fixes WHERE logement_id = ?').bind(logementId).first() || {};
@@ -97,7 +125,8 @@ router.get('/mois', async (c) => {
     const { logement, chargesFixes, params } = await dataLogement(db, id);
     const resas = await reservationsMois(db, id, ym);
     const ups = await upsellsMois(db, id, ym);
-    const ind = indicateursLogement({ chargesFixes, params, reservations: resas, upsells: ups, ym });
+    const nuitsDisponibles = await nuitsDispoMois(db, id, ym);
+    const ind = indicateursLogement({ chargesFixes, params, reservations: resas, upsells: ups, nuitsDisponibles, ym });
 
     const resasADate = estMoisCourant ? resas.filter((r) => r.check_in <= aujourdhui) : resas;
     const encaisse =
@@ -105,7 +134,10 @@ router.get('/mois', async (c) => {
       (await upsellsMois(db, id, ym, estMoisCourant ? aujourdhui : null));
     const j15 = pilotageJ15({ chargesFixes, encaisseADate: encaisse, jourDuMois, nbJoursMois });
 
-    parBien.push({ logement, indicateurs: ind, j15 });
+    const ctx = await contexteReco(db, id, ym, estMoisCourant, jourDuMois, nbJoursMois);
+    const recommandations = genererRecommandations({ ind, j15, ...ctx });
+
+    parBien.push({ logement, indicateurs: ind, j15, recommandations, contexte: ctx });
   }
 
   const sum = (sel) => parBien.reduce((s, b) => s + (sel(b) || 0), 0);

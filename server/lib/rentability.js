@@ -73,11 +73,21 @@ export function indicateursLogement({
   let ca_hebergement = 0;
   let charges_variables_reelles = 0;
   let nuits_reservees = 0;
+  let commission_et_frais_total = 0;
+  let menage_total = 0;
+  let linge_total = 0;
+  let consommables_total = 0;
   for (const r of reservations) {
     const prix = r.prix_sejour || 0;
     ca_hebergement += prix;
     nuits_reservees += r.nb_nuits || 0;
-    charges_variables_reelles += chargesVariablesReservation(prix, params).charges_variables;
+    const cv = chargesVariablesReservation(prix, params);
+    charges_variables_reelles += cv.charges_variables;
+    commission_et_frais_total += cv.commission_et_frais;
+    // Coûts par séjour : comptés UNE FOIS par réservation (1 ménage / linge par séjour)
+    menage_total += params.cout_menage_sejour || 0;
+    linge_total += params.cout_linge_sejour || 0;
+    consommables_total += params.cout_consommables_sejour || 0;
   }
 
   const ca_total = ca_hebergement + upsells; // CA = nuits + upsells (§5)
@@ -124,6 +134,13 @@ export function indicateursLogement({
     upsells,
     ca_total,
     charges_variables_reelles,
+    charges_detail: {
+      commission_et_frais: commission_et_frais_total,
+      menage: menage_total,
+      linge: linge_total,
+      consommables: consommables_total,
+      nb_sejours: reservations.length,
+    },
     marge_variable_totale,
     taux_marge_var,
     seuil_ca,
