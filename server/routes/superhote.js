@@ -73,14 +73,33 @@ router.post('/sync', async (c) => {
   const checkout_from = body.checkout_from || iso(new Date(now.getFullYear(), now.getMonth() - 6, 1));
   const checkout_to = body.checkout_to || iso(new Date(now.getFullYear(), now.getMonth() + 12, 1));
 
-  const data = await shFetch(c, '/reservations', {
-    checkout_from, checkout_to, updated_since: body.updated_since || null,
-  });
-  const items = liste(data, 'reservations');
+  // Pagination Superhote (result.meta.last_page) : on récupère toutes les pages.
+  const items = [];
+  let page = 1, lastPage = 1;
+  do {
+    const data = await shFetch(c, '/reservations', {
+      checkout_from, checkout_to, updated_since: body.updated_since || null, page,
+    });
+    items.push(...liste(data, 'reservations'));
+    lastPage = data?.result?.meta?.last_page ?? 1;
+    page += 1;
+  } while (page <= lastPage && page <= 40);
 
   const { results: logements } = await db.prepare('SELECT id, rental_id_superhote FROM logements WHERE rental_id_superhote IS NOT NULL').all();
   const mapRental = new Map(logements.map((l) => [String(l.rental_id_superhote), l.id]));
   const idRental = (it) => it.rental_id ?? it.rentalId ?? it.rentalID ?? it.listingId ?? it.property_id ?? null;
+
+  // Codes plateforme Superhote (numériques) → libellés best-effort.
+  const PLATEFORMES = { 1: 'Airbnb', 2: 'Booking', 3: 'Direct', 4: 'Abritel/Vrbo', 5: 'Expedia' };
+  // Le CA n'est pas dans l'endpoint réservations (total_price souvent null) →
+  // on le reconstitue à partir des prix du calendrier (nuits du séjour).
+  const prixDepuisCalendrier = async (logementId, ci, co) => {
+    if (!ci || !co) return 0;
+    const row = await db.prepare(
+      'SELECT SUM(prix_affiche) AS s FROM calendrier WHERE logement_id = ? AND date >= ? AND date < ?'
+    ).bind(logementId, ci, co).first();
+    return row && row.s ? Number(row.s) : 0;
+  };
 
   // Upsert manuel (sans ON CONFLICT) → fonctionne même sans index unique.
   const insSql = `INSERT INTO reservations
@@ -94,22 +113,30 @@ router.post('/sync', async (c) => {
 
   let enregistres = 0, ignores = 0;
   const idsVus = new Set();
+  const statutsVus = new Set();
   for (const it of items) {
     const rid = idRental(it);
     if (rid != null) idsVus.add(String(rid));
+    statutsVus.add(it.status);
     const logementId = mapRental.get(String(rid));
     if (!logementId) { ignores++; continue; }
     const resaId = String(it.id ?? it.reservation_id ?? it.reservationId ?? '');
-    const check_in = String(it.check_in ?? it.checkIn ?? it.arrival ?? it.start_date ?? '').slice(0, 10);
-    const check_out = String(it.check_out ?? it.checkOut ?? it.departure ?? it.end_date ?? '').slice(0, 10);
-    const canal = it.channel ?? it.source ?? it.platform ?? it.canal ?? null;
+    const check_in = String(it.checkin ?? it.check_in ?? it.checkIn ?? it.arrival ?? it.start_date ?? '').slice(0, 10);
+    const check_out = String(it.checkout ?? it.check_out ?? it.checkOut ?? it.departure ?? it.end_date ?? '').slice(0, 10);
+    const platform = it.platform ?? it.channel_id ?? null;
+    const canal = it.channel ?? it.source ?? (platform != null ? (PLATEFORMES[platform] || `Canal ${platform}`) : null);
     const nb_nuits = calcNuits(check_in, check_out, it.nights ?? it.nb_nights ?? it.number_of_nights);
-    const nb_voyageurs = num(it.guests ?? it.nb_guests ?? it.adults ?? it.nb_voyageurs);
-    const prix = num(it.total_price ?? it.totalPrice ?? it.total_amount ?? it.amount ?? it.price ?? it.payout ?? it.prix_sejour);
+    const nb_voyageurs = num(it.guests_count) || num(it.guests) || (num(it.adults_count) + num(it.children_count)) || num(it.nb_voyageurs);
+    let prix = num(it.total_price ?? it.totalPrice ?? it.total_amount ?? it.amount ?? it.price ?? it.payout ?? it.prix_sejour);
+    if (!prix) prix = await prixDepuisCalendrier(logementId, check_in, check_out);
     const taxe = num(it.city_tax ?? it.cityTax ?? it.tourist_tax ?? it.taxe_sejour);
-    const statut = it.status ?? it.state ?? 'confirmée';
+    // status numérique Superhote : 1 = confirmée. Les codes d'annulation seront
+    // ajoutés ici une fois identifiés (cf. statuts_vus dans la réponse).
+    const ANNULEES = new Set([]);
+    const statut = ANNULEES.has(Number(it.status)) ? 'annulée' : 'confirmée';
     const dateResa = String(it.created_at ?? it.createdAt ?? it.booked_at ?? it.date_reservation ?? '').slice(0, 10);
-    const voyageur = it.guest_name ?? it.guestName ?? it.guest?.name ?? it.voyageur_nom ?? null;
+    const nomComplet = `${it.guest_first_name ?? ''} ${it.guest_last_name ?? ''}`.trim();
+    const voyageur = it.guest_name ?? it.guestName ?? it.guest?.name ?? (nomComplet || it.voyageur_nom || null);
 
     const existing = resaId
       ? await db.prepare('SELECT id FROM reservations WHERE reservation_id_superhote = ?').bind(resaId).first()
@@ -137,6 +164,7 @@ router.post('/sync', async (c) => {
     // côté app, et noms de champs du 1er élément (sans les valeurs).
     ids_superhote_vus: [...idsVus],
     ids_mappes_dans_app: [...mapRental.keys()],
+    statuts_vus: [...statutsVus],
     exemple_champs: items[0] ? Object.keys(items[0]) : [],
   });
 });
@@ -149,8 +177,8 @@ router.post('/sync-calendar', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const now = new Date();
   const iso = (d) => d.toISOString().slice(0, 10);
-  const from = body.from || iso(new Date(now.getFullYear(), now.getMonth(), 1));
-  const to = body.to || iso(new Date(now.getFullYear(), now.getMonth() + 4, 0)); // ~4 mois
+  const from = body.from || iso(new Date(now.getFullYear(), now.getMonth() - 2, 1)); // 2 mois en arrière
+  const to = body.to || iso(new Date(now.getFullYear(), now.getMonth() + 4, 0));     // ~4 mois en avant
 
   const { results: logements } = await db.prepare(
     'SELECT id, rental_id_superhote FROM logements WHERE rental_id_superhote IS NOT NULL'

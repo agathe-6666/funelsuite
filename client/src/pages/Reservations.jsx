@@ -40,9 +40,10 @@ export default function Reservations() {
   async function synchroniser() {
     setSyncMsg('Synchronisation…');
     try {
-      const res = await api.post('/superhote/sync', {});
+      // Calendrier d'abord : il sert à reconstituer le CA des réservations.
       let cal = null;
       try { cal = await api.post('/superhote/sync-calendar', {}); } catch { /* calendrier optionnel */ }
+      const res = await api.post('/superhote/sync', {});
       setSyncMsg(
         `${res.enregistres} réservation(s) / ${res.recus} reçue(s)` +
         (res.ignores_sans_mapping ? ` · ${res.ignores_sans_mapping} ignorée(s) (mapping)` : '') +
