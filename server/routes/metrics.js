@@ -22,6 +22,29 @@ async function reservationsMois(db, logementId, ym) {
   return results;
 }
 
+// Table des upsells saisis au mois (créée à la volée → pas besoin de migration).
+let _extraReady = false;
+async function ensureExtra(db) {
+  if (_extraReady) return;
+  await db.prepare(`CREATE TABLE IF NOT EXISTS upsells_mensuels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    logement_id INTEGER NOT NULL,
+    mois TEXT NOT NULL,
+    montant REAL DEFAULT 0
+  )`).run();
+  _extraReady = true;
+}
+
+// Upsell saisi manuellement pour un bien sur un mois (montant forfaitaire).
+async function upsellManuel(db, logementId, ym) {
+  await ensureExtra(db);
+  const row = await db.prepare(
+    'SELECT COALESCE(SUM(montant),0) AS total FROM upsells_mensuels WHERE logement_id = ? AND mois = ?'
+  ).bind(logementId, ym).first();
+  return row.total || 0;
+}
+
+// Total upsells du mois = upsells par réservation + saisie mensuelle forfaitaire.
 async function upsellsMois(db, logementId, ym, jusquaDate = null) {
   let sql = `SELECT COALESCE(SUM(u.montant),0) AS total
              FROM upsells u JOIN reservations r ON r.id = u.reservation_id
@@ -29,7 +52,26 @@ async function upsellsMois(db, logementId, ym, jusquaDate = null) {
   const args = [logementId, ym];
   if (jusquaDate) { sql += ' AND r.check_in <= ?'; args.push(jusquaDate); }
   const row = await db.prepare(sql).bind(...args).first();
-  return row.total || 0;
+  return (row.total || 0) + (await upsellManuel(db, logementId, ym));
+}
+
+// Nuits disponibles d'un mois (depuis le calendrier Superhote), sinon null.
+async function nuitsDispoMois(db, logementId, ym) {
+  const start = `${ym}-01`;
+  const end = `${ym}-${String(joursDansMois(ym)).padStart(2, '0')}`;
+  const row = await db.prepare(
+    'SELECT COUNT(*) AS n FROM calendrier WHERE logement_id = ? AND date >= ? AND date <= ?'
+  ).bind(logementId, start, end).first();
+  return row.n || null;
+}
+
+// Le bail couvre-t-il ce mois ? (pour ne compter les charges fixes que si actif)
+function bailCouvre(l, ym) {
+  const start = `${ym}-01`;
+  const end = `${ym}-${String(joursDansMois(ym)).padStart(2, '0')}`;
+  if (l.date_debut_bail && l.date_debut_bail > end) return false;
+  if (l.date_fin_bail && l.date_fin_bail < start) return false;
+  return true;
 }
 
 async function dataLogement(db, logementId) {
@@ -150,8 +192,79 @@ router.get('/logement/:id', async (c) => {
   if (!logement) return c.json({ error: 'Logement introuvable' }, 404);
   const resas = await reservationsMois(db, id, ym);
   const ups = await upsellsMois(db, id, ym);
-  const indicateurs = indicateursLogement({ chargesFixes, params, reservations: resas, upsells: ups, ym });
-  return c.json({ logement, chargesFixes, params, indicateurs, reservations: resas });
+  const nuitsDisponibles = await nuitsDispoMois(db, id, ym);
+  const indicateurs = indicateursLogement({ chargesFixes, params, reservations: resas, upsells: ups, nuitsDisponibles, ym });
+  const upsell_mensuel = await upsellManuel(db, id, ym);
+  return c.json({ logement, chargesFixes, params, indicateurs, reservations: resas, upsell_mensuel, mois: ym });
+});
+
+// ─── Upsells saisis au mois (forfait par bien) ────────────────────────────
+router.get('/upsells-mensuels', async (c) => {
+  const db = c.env.DB;
+  const logementId = Number(c.req.query('logement_id'));
+  const ym = c.req.query('mois') || ymCourant();
+  return c.json({ logement_id: logementId, mois: ym, montant: await upsellManuel(db, logementId, ym) });
+});
+
+router.put('/upsells-mensuels', async (c) => {
+  const db = c.env.DB;
+  await ensureExtra(db);
+  const { logement_id, mois, montant } = await c.req.json();
+  const lid = Number(logement_id);
+  const ym = mois || ymCourant();
+  const m = Number(montant) || 0;
+  if (!lid) return c.json({ error: 'logement_id requis' }, 400);
+  const existing = await db.prepare('SELECT id FROM upsells_mensuels WHERE logement_id = ? AND mois = ?').bind(lid, ym).first();
+  if (existing) await db.prepare('UPDATE upsells_mensuels SET montant = ? WHERE id = ?').bind(m, existing.id).run();
+  else await db.prepare('INSERT INTO upsells_mensuels (logement_id, mois, montant) VALUES (?, ?, ?)').bind(lid, ym, m).run();
+  return c.json({ ok: true, logement_id: lid, mois: ym, montant: m });
+});
+
+// ─── Statistiques : KPIs mensuels sur une année (pour les graphiques) ──────
+router.get('/statistiques', async (c) => {
+  const db = c.env.DB;
+  const annee = c.req.query('annee') || String(new Date().getFullYear());
+  const { results: logements } = await db.prepare("SELECT * FROM logements WHERE statut = 'actif'").all();
+  const labels = ['', 'Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+
+  const serie = [];
+  for (let m = 1; m <= 12; m++) {
+    const ym = `${annee}-${String(m).padStart(2, '0')}`;
+    let ca = 0, caHeb = 0, cvar = 0, cfix = 0, nuitsRes = 0, nuitsDispo = 0, ups = 0;
+    for (const l of logements) {
+      const chargesFixes = await db.prepare('SELECT * FROM charges_fixes WHERE logement_id = ?').bind(l.id).first() || {};
+      const params = await db.prepare('SELECT * FROM params_charges_variables WHERE logement_id = ?').bind(l.id).first() || {};
+      const resas = await reservationsMois(db, l.id, ym);
+      const upsM = await upsellsMois(db, l.id, ym);
+      const ndispo = await nuitsDispoMois(db, l.id, ym);
+      const ind = indicateursLogement({ chargesFixes, params, reservations: resas, upsells: upsM, nuitsDisponibles: ndispo, ym });
+      ca += ind.ca_total;
+      caHeb += ind.ca_hebergement;
+      cvar += ind.charges_variables_reelles;
+      ups += ind.upsells;
+      nuitsRes += ind.nuits_reservees;
+      nuitsDispo += ind.nuits_dispo;
+      if (bailCouvre(l, ym)) cfix += ind.charges_fixes;
+    }
+    const marge = ca - cvar - cfix;
+    serie.push({
+      mois: ym,
+      label: labels[m],
+      ca: Math.round(ca),
+      ca_hebergement: Math.round(caHeb),
+      upsells: Math.round(ups),
+      marge: Math.round(marge),
+      taux_marge: ca > 0 ? marge / ca : null,
+      charges_fixes: Math.round(cfix),
+      charges_variables: Math.round(cvar),
+      nuits_reservees: nuitsRes,
+      nuits_dispo: nuitsDispo,
+      occupation: nuitsDispo > 0 ? nuitsRes / nuitsDispo : null,
+      revpar: nuitsDispo > 0 ? Math.round(caHeb / nuitsDispo) : null,
+      adr: nuitsRes > 0 ? Math.round(caHeb / nuitsRes) : null,
+    });
+  }
+  return c.json({ annee, serie });
 });
 
 // ─── Simulateur (Lot 5) ───────────────────────────────────────────────────

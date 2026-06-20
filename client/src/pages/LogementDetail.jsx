@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, fmtEuro, fmtNum, fmtPct, moisCourant } from '../api.js';
+import { api, fmtEuro, fmtNum, fmtPct, moisCourant, moisLabel } from '../api.js';
 import { Stat } from '../components/ui.jsx';
 
 // Champ générique
@@ -20,12 +20,22 @@ export default function LogementDetail() {
   const [l, setL] = useState(null);
   const [metr, setMetr] = useState(null);
   const [saved, setSaved] = useState(false);
+  const [mois, setMois] = useState(moisCourant());
+  const [upsell, setUpsell] = useState(0);
 
   const charger = () => api.get(`/logements/${id}`).then(setL);
   useEffect(() => { charger(); }, [id]);
   useEffect(() => {
-    api.get(`/metrics/logement/${id}?mois=${moisCourant()}`).then(setMetr).catch(() => {});
-  }, [id, saved]);
+    api.get(`/metrics/logement/${id}?mois=${mois}`).then((m) => {
+      setMetr(m);
+      setUpsell(m.upsell_mensuel || 0);
+    }).catch(() => {});
+  }, [id, saved, mois]);
+
+  async function enregistrerUpsell() {
+    await api.put('/metrics/upsells-mensuels', { logement_id: Number(id), mois, montant: Number(upsell) || 0 });
+    setSaved((s) => !s); // refait le calcul des indicateurs
+  }
 
   if (!l) return <div className="text-nuit/50">Chargement…</div>;
 
@@ -64,10 +74,26 @@ export default function LogementDetail() {
         </div>
       </header>
 
-      {/* Indicateurs de rentabilité (live, mois en cours) */}
+      {/* Indicateurs de rentabilité (live, mois sélectionné) */}
       {i && (
         <section>
-          <h2 className="text-xl mb-3">Rentabilité · mois en cours</h2>
+          <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
+            <h2 className="text-xl">Rentabilité · {moisLabel(mois)}</h2>
+            <div className="flex items-end gap-3">
+              <div>
+                <label className="label-champ">Mois analysé</label>
+                <input type="month" className="input w-auto" value={mois} onChange={(e) => setMois(e.target.value)} />
+              </div>
+              <div>
+                <label className="label-champ">Upsells du mois (€)</label>
+                <div className="flex gap-2">
+                  <input type="number" className="input w-28" value={upsell}
+                    onChange={(e) => setUpsell(e.target.value)} />
+                  <button className="btn-or" onClick={enregistrerUpsell}>OK</button>
+                </div>
+              </div>
+            </div>
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Stat label="Seuil de rentabilité" valeur={i.seuil_ca ? fmtEuro(i.seuil_ca) : '—'} sous="CA à atteindre" />
             <Stat label="Seuil en nuits" valeur={i.seuil_nuits ? `${fmtNum(i.seuil_nuits, 0)} nuits` : '—'} />
@@ -77,6 +103,7 @@ export default function LogementDetail() {
             <Stat label="Marge nette" valeur={fmtEuro(i.marge_nette)} accent={i.marge_nette >= 0} />
             <Stat label="Occupation" valeur={fmtPct(i.taux_occupation)} />
             <Stat label="RevPAR" valeur={fmtEuro(i.revpar)} />
+            <Stat label="Upsells (mois)" valeur={fmtEuro(i.upsells)} sous="inclus dans le CA" />
           </div>
         </section>
       )}
