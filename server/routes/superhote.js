@@ -82,15 +82,15 @@ router.post('/sync', async (c) => {
   const mapRental = new Map(logements.map((l) => [String(l.rental_id_superhote), l.id]));
   const idRental = (it) => it.rental_id ?? it.rentalId ?? it.rentalID ?? it.listingId ?? it.property_id ?? null;
 
-  const sql = `
-    INSERT INTO reservations
+  // Upsert manuel (sans ON CONFLICT) → fonctionne même sans index unique.
+  const insSql = `INSERT INTO reservations
       (reservation_id_superhote, logement_id, canal, check_in, check_out, nb_nuits,
        nb_voyageurs, prix_sejour, taxe_sejour, statut, date_reservation, updated_at, voyageur_nom)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
-    ON CONFLICT(reservation_id_superhote) DO UPDATE SET
-      check_in=excluded.check_in, check_out=excluded.check_out, nb_nuits=excluded.nb_nuits,
-      prix_sejour=excluded.prix_sejour, taxe_sejour=excluded.taxe_sejour,
-      statut=excluded.statut, updated_at=datetime('now')`;
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`;
+  const updSql = `UPDATE reservations SET
+      logement_id=?, canal=?, check_in=?, check_out=?, nb_nuits=?, nb_voyageurs=?,
+      prix_sejour=?, taxe_sejour=?, statut=?, date_reservation=?, updated_at=datetime('now'), voyageur_nom=?
+    WHERE reservation_id_superhote=?`;
 
   let enregistres = 0, ignores = 0;
   const idsVus = new Set();
@@ -99,22 +99,32 @@ router.post('/sync', async (c) => {
     if (rid != null) idsVus.add(String(rid));
     const logementId = mapRental.get(String(rid));
     if (!logementId) { ignores++; continue; }
+    const resaId = String(it.id ?? it.reservation_id ?? it.reservationId ?? '');
     const check_in = String(it.check_in ?? it.checkIn ?? it.arrival ?? it.start_date ?? '').slice(0, 10);
     const check_out = String(it.check_out ?? it.checkOut ?? it.departure ?? it.end_date ?? '').slice(0, 10);
-    await db.prepare(sql).bind(
-      String(it.id ?? it.reservation_id ?? it.reservationId ?? ''),
-      logementId,
-      it.channel ?? it.source ?? it.platform ?? it.canal ?? null,
-      check_in,
-      check_out,
-      calcNuits(check_in, check_out, it.nights ?? it.nb_nights ?? it.number_of_nights),
-      num(it.guests ?? it.nb_guests ?? it.adults ?? it.nb_voyageurs),
-      num(it.total_price ?? it.totalPrice ?? it.total_amount ?? it.amount ?? it.price ?? it.payout ?? it.prix_sejour),
-      num(it.city_tax ?? it.cityTax ?? it.tourist_tax ?? it.taxe_sejour),
-      it.status ?? it.state ?? 'confirmée',
-      String(it.created_at ?? it.createdAt ?? it.booked_at ?? it.date_reservation ?? '').slice(0, 10),
-      it.guest_name ?? it.guestName ?? it.guest?.name ?? it.voyageur_nom ?? null,
-    ).run();
+    const canal = it.channel ?? it.source ?? it.platform ?? it.canal ?? null;
+    const nb_nuits = calcNuits(check_in, check_out, it.nights ?? it.nb_nights ?? it.number_of_nights);
+    const nb_voyageurs = num(it.guests ?? it.nb_guests ?? it.adults ?? it.nb_voyageurs);
+    const prix = num(it.total_price ?? it.totalPrice ?? it.total_amount ?? it.amount ?? it.price ?? it.payout ?? it.prix_sejour);
+    const taxe = num(it.city_tax ?? it.cityTax ?? it.tourist_tax ?? it.taxe_sejour);
+    const statut = it.status ?? it.state ?? 'confirmée';
+    const dateResa = String(it.created_at ?? it.createdAt ?? it.booked_at ?? it.date_reservation ?? '').slice(0, 10);
+    const voyageur = it.guest_name ?? it.guestName ?? it.guest?.name ?? it.voyageur_nom ?? null;
+
+    const existing = resaId
+      ? await db.prepare('SELECT id FROM reservations WHERE reservation_id_superhote = ?').bind(resaId).first()
+      : null;
+    if (existing) {
+      await db.prepare(updSql).bind(
+        logementId, canal, check_in, check_out, nb_nuits, nb_voyageurs,
+        prix, taxe, statut, dateResa, voyageur, resaId,
+      ).run();
+    } else {
+      await db.prepare(insSql).bind(
+        resaId || null, logementId, canal, check_in, check_out, nb_nuits,
+        nb_voyageurs, prix, taxe, statut, dateResa, voyageur,
+      ).run();
+    }
     enregistres++;
   }
   return c.json({
@@ -129,6 +139,39 @@ router.post('/sync', async (c) => {
     ids_mappes_dans_app: [...mapRental.keys()],
     exemple_champs: items[0] ? Object.keys(items[0]) : [],
   });
+});
+
+// Synchro du calendrier (← GET /rentals/{id}/calendar) → table calendrier.
+// Alimente disponibilité, prix affichés, occupation/RevPAR et le moteur de reco.
+router.post('/sync-calendar', async (c) => {
+  const db = c.env.DB;
+  if (!token(c)) return c.json({ error: 'SUPERHOTE_TOKEN non configuré', configured: false }, 409);
+  const body = await c.req.json().catch(() => ({}));
+  const now = new Date();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const from = body.from || iso(new Date(now.getFullYear(), now.getMonth(), 1));
+  const to = body.to || iso(new Date(now.getFullYear(), now.getMonth() + 4, 0)); // ~4 mois
+
+  const { results: logements } = await db.prepare(
+    'SELECT id, rental_id_superhote FROM logements WHERE rental_id_superhote IS NOT NULL'
+  ).all();
+
+  const ins = db.prepare(
+    `INSERT INTO calendrier (logement_id, date, dispo, prix_affiche, min_stay) VALUES (?, ?, ?, ?, ?)`
+  );
+  let jours = 0;
+  for (const l of logements) {
+    const data = await shFetch(c, `/rentals/${l.rental_id_superhote}/calendar`, { from, to });
+    const days = data?.result?.days ?? liste(data, 'days');
+    // On remplace la fenêtre pour ce logement (pas de doublons).
+    await db.prepare('DELETE FROM calendrier WHERE logement_id = ? AND date >= ? AND date <= ?')
+      .bind(l.id, from, to).run();
+    for (const d of days) {
+      await ins.bind(l.id, d.date, d.available ? 1 : 0, num(d.price), d.min_nights ?? null).run();
+      jours++;
+    }
+  }
+  return c.json({ ok: true, logements: logements.length, jours, periode: { from, to } });
 });
 
 export default router;

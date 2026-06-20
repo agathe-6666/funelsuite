@@ -41,11 +41,12 @@ export default function Reservations() {
     setSyncMsg('Synchronisation…');
     try {
       const res = await api.post('/superhote/sync', {});
-      const ids = (res.ids_superhote_vus || []).join(', ') || '—';
+      let cal = null;
+      try { cal = await api.post('/superhote/sync-calendar', {}); } catch { /* calendrier optionnel */ }
       setSyncMsg(
-        `${res.enregistres} enregistrée(s) / ${res.recus} reçue(s)` +
-        (res.ignores_sans_mapping ? ` · ${res.ignores_sans_mapping} ignorée(s) faute de mapping` : '') +
-        ` · IDs Superhote vus : ${ids}`
+        `${res.enregistres} réservation(s) / ${res.recus} reçue(s)` +
+        (res.ignores_sans_mapping ? ` · ${res.ignores_sans_mapping} ignorée(s) (mapping)` : '') +
+        (cal ? ` · calendrier : ${cal.jours} jours sur ${cal.logements} bien(s)` : '')
       );
       charger();
     } catch (e) { setSyncMsg(`⚠ ${e.message}`); }
