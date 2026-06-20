@@ -35,11 +35,22 @@ router.post('/sync', async (c) => {
   const db = c.env.DB;
   if (!token(c)) return c.json({ error: 'SUPERHOTE_TOKEN non configuré', configured: false }, 409);
   const body = await c.req.json().catch(() => ({}));
-  const data = await shFetch(c, '/reservations', { updated_since: body.updated_since || null });
+
+  // Fenêtre de dates (l'API Superhote attend checkout_from/checkout_to).
+  // Par défaut : 6 mois en arrière → 12 mois en avant, pour ramener large.
+  const now = new Date();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const checkout_from = body.checkout_from || iso(new Date(now.getFullYear(), now.getMonth() - 6, 1));
+  const checkout_to = body.checkout_to || iso(new Date(now.getFullYear(), now.getMonth() + 12, 1));
+
+  const data = await shFetch(c, '/reservations', {
+    checkout_from, checkout_to, updated_since: body.updated_since || null,
+  });
   const items = Array.isArray(data) ? data : data.data || data.reservations || [];
 
   const { results: logements } = await db.prepare('SELECT id, rental_id_superhote FROM logements WHERE rental_id_superhote IS NOT NULL').all();
   const mapRental = new Map(logements.map((l) => [String(l.rental_id_superhote), l.id]));
+  const idRental = (it) => it.rentalId ?? it.rental_id ?? it.rentalID ?? it.listingId ?? it.property_id ?? null;
 
   const sql = `
     INSERT INTO reservations
@@ -52,8 +63,11 @@ router.post('/sync', async (c) => {
       statut=excluded.statut, updated_at=datetime('now')`;
 
   let enregistres = 0, ignores = 0;
+  const idsVus = new Set();
   for (const it of items) {
-    const logementId = mapRental.get(String(it.rentalId ?? it.rental_id));
+    const rid = idRental(it);
+    if (rid != null) idsVus.add(String(rid));
+    const logementId = mapRental.get(String(rid));
     if (!logementId) { ignores++; continue; }
     await db.prepare(sql).bind(
       String(it.id ?? it.reservationId ?? ''),
@@ -71,7 +85,18 @@ router.post('/sync', async (c) => {
     ).run();
     enregistres++;
   }
-  return c.json({ ok: true, recus: items.length, enregistres, ignores_sans_mapping: ignores });
+  return c.json({
+    ok: true,
+    recus: items.length,
+    enregistres,
+    ignores_sans_mapping: ignores,
+    periode: { checkout_from, checkout_to },
+    // Aide au diagnostic : IDs Superhote vus dans le lot, IDs déjà mappés
+    // côté app, et noms de champs du 1er élément (sans les valeurs).
+    ids_superhote_vus: [...idsVus],
+    ids_mappes_dans_app: [...mapRental.keys()],
+    exemple_champs: items[0] ? Object.keys(items[0]) : [],
+  });
 });
 
 export default router;

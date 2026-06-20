@@ -41,7 +41,13 @@ export default function Reservations() {
     setSyncMsg('Synchronisation…');
     try {
       const res = await api.post('/superhote/sync', {});
-      setSyncMsg(`✅ ${res.enregistres} réservation(s) synchronisée(s).`); charger();
+      const ids = (res.ids_superhote_vus || []).join(', ') || '—';
+      setSyncMsg(
+        `${res.enregistres} enregistrée(s) / ${res.recus} reçue(s)` +
+        (res.ignores_sans_mapping ? ` · ${res.ignores_sans_mapping} ignorée(s) faute de mapping` : '') +
+        ` · IDs Superhote vus : ${ids}`
+      );
+      charger();
     } catch (e) { setSyncMsg(`⚠ ${e.message}`); }
   }
 
